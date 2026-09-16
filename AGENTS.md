@@ -2,13 +2,17 @@
 
 ## Project overview
 
-This repository contains an Even Realities G2 application built with Vite,
-TypeScript, and the Even Hub SDK. The application runs in the Even mobile app;
-the glasses act as the display and input device.
+This repository contains Even G2 Fuel Timer, an Even Realities G2 countdown
+application built with Vite, TypeScript, and the Even Hub SDK. It helps users
+keep a drink-ordering pace at social gatherings. The application runs in the
+Even mobile app; the glasses act as the display and input device.
 
 ## Important files
 
-- `src/main.ts`: glasses UI, input handling, and application lifecycle.
+- `src/main.ts`: timer state, Canvas image generation, glasses UI, input
+  handling, persistence, and application lifecycle.
+- `doc/2026-09-16-design.md`: product behavior, screen layout, state machine,
+  rendering pipeline, and verification plan.
 - `app.json`: Even Hub package metadata, permissions, and minimum versions.
 - `index.html`: mobile WebView host page.
 - `vite.config.ts`: local development server configuration.
@@ -45,6 +49,27 @@ After changing TypeScript, configuration, dependencies, or the manifest:
 
 Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
 
+## Fuel Timer behavior
+
+- The timer modes are `idle`, `running`, `paused`, and `completed`; keep timer
+  state separate from rendering and SDK calls.
+- A single tap starts, pauses, or resumes. A double tap always calls
+  `shutDownPageContainer(1)` to show the standard Even Hub exit confirmation;
+  never substitute immediate exit mode `0`.
+- In `idle`, scroll changes and persists the configured duration from 1 to 60
+  minutes. In `paused`, scroll changes only the current remaining time. In
+  `running`, scroll reveals the main screen without changing time.
+- Display remaining time as whole minutes rounded up. Use an absolute deadline
+  for completion so backgrounding and delayed callbacks do not introduce
+  countdown drift.
+- Show the animated main view for five seconds after starting, resuming, or a
+  running interaction, then continue the fill animation in the compact view.
+- Persist only the idle configured duration under the versioned localStorage
+  key `even-g2-fuel-timer.settings.v1`. Invalid data falls back to 30 minutes.
+- Completion shows a static empty mug and `Fuel up!` for approximately three
+  seconds, then returns to `idle` with the persisted configured duration. Do
+  not vertically animate the completion mug; the container clips its top edge.
+
 ## Even G2 constraints
 
 - The glasses display is 576 x 288 pixels per eye with 16 monochrome-green
@@ -52,6 +77,9 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
 - Prefer SDK container updates such as `textContainerUpgrade` over rebuilding
   the whole page, because rebuilding can visibly flicker.
 - Call `createStartUpPageContainer` only once for the initial page.
+- Keep all image transfers on one promise queue. Never call
+  `updateImageRawData` concurrently. The requested compact animation runs at
+  two frames per second; verify that cadence and transfer load on hardware.
 - Exactly one container on an interactive page must capture events with
   `isEventCapture: 1`.
 - A single click has enum value `0`. Protobuf can omit this zero-valued
@@ -61,9 +89,10 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
   missing event type as a single click.
 - System gestures normally arrive through `sysEvent`; scrolling normally
   arrives through `textEvent`. Do not flatten unrelated envelopes into clicks.
-- Keep a reliable exit path. The starter uses double-click to call
+- Keep double-click as the reliable exit path and preserve its use of
   `shutDownPageContainer(1)`.
 - Unsubscribe listeners when the app receives a normal or abnormal exit event.
+- Clear countdown, compact-view, animation, and completion timers on exit.
 - The glasses have no speaker or camera. Phone capabilities may require SDK
   permissions and explicit user consent.
 
@@ -87,6 +116,11 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
 - Use `async`/`await` and handle rejected SDK or network operations visibly.
 - Keep application state separate from rendering so screens can be updated
   without losing state.
+- Keep Canvas output high-contrast and friendly to the glasses' 16 luminance
+  levels. Preserve the generated pictogram's alpha channel, bold silhouette,
+  and separated gray values, and cache reusable mug frames and minute images.
+- Render the `Fuel up!` lockup from `src/assets/fuel-up-logotype.png`; do not
+  replace it with device-font text unless a redesign is explicitly requested.
 - Prefer small focused changes and preserve existing behavior unless the user
   requests a redesign.
 - Do not add dependencies when the platform or existing code can solve the

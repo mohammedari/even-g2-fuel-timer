@@ -1,42 +1,60 @@
-# Even G2 app starter
+# Even G2 Fuel Timer
 
-Even Realities 公式の minimal テンプレートを基にした、Even G2 アプリの開発環境です。
-Vite + TypeScript + Even Hub SDK + CLI + simulator を含み、最初の画面には `Hello from G2!` と表示されます。
+飲み会でドリンクを注文するペースを保つための、Even Realities G2向けカウントダウンタイマーです。満タンのジョッキ、ボールドイタリックの「Fuel up!」ロゴ、設定時間を大きく表示し、動作中はビールが減るアニメーションで状態を伝えます。
 
-## Run
+## 操作
 
-```bash
+| 操作 | 動作 |
+|---|---|
+| シングルタップ | タイマーの開始、一時停止、再開 |
+| ダブルタップ | Even Hub標準の終了確認を表示 |
+| 待機中に上／下スワイプ | 設定時間を1分ずつ変更して保存 |
+| 一時停止中に上／下スワイプ | 今回の残り時間だけを1分ずつ変更 |
+| 実行中に上／下スワイプ | 時間を変えずメイン画面を5秒間再表示 |
+
+設定範囲は1–60分、初期値は30分です。残り時間は分単位で切り上げ表示されます。開始から5秒後にメイン画面が消え、右上に小さなジョッキと残り時間だけが表示されます。省表示中もジョッキの残量アニメーションは継続します。
+
+カウントダウンが完了すると、中央に空のジョッキと「Fuel up!」を約3秒表示し、保存済みの設定時間で待機画面へ戻ります。
+
+## 開発
+
+Node.jsとnpmを用意し、依存関係をインストールします。
+
+```powershell
 npm install
 npm run dev
 ```
 
-Then either:
-- **Simulator:** `npm run simulate`
-- **Real glasses:** `npx evenhub qr --url http://<your-ip>:5173` and scan with the Even Hub companion app.
+別のターミナルでシミュレーターを起動します。
 
-PowerShell では、開発サーバーとシミュレーターを別々のターミナルで実行してください。
+```powershell
+npm run simulate
+```
 
-実機テスト前に、`app.json` の `package_id` と `name` を自分のアプリ用に変更してください。
+実機では開発サーバーと同じLANに接続し、Even HubアプリでQRコードを読み取ります。
 
-## Pack for distribution
+```powershell
+npx evenhub qr --url http://<LAN-IP>:5173
+```
 
-```bash
+## ビルドとパッケージ
+
+```powershell
+npm run build
 npm run pack
 ```
 
-Produces an `.ehpk` file.
+`npm run pack` は配布用の`.ehpk`を生成します。`node_modules/`、`dist/`、`.ehpk`はコミットしません。
 
-## What's in here
+## 主なファイル
 
-| File | Purpose |
+| ファイル | 内容 |
 |---|---|
-| `index.html` | WebView host. Viewport meta tag locks zoom; CSS kills iOS double-tap zoom + rubber-band scroll. |
-| `src/main.ts` | Creates a single full-canvas text container at app startup. |
-| `app.json` | Even Hub manifest. No permissions by default. |
-| `tsconfig.json` | Standard Vite vanilla-ts config. |
-| `vite.config.ts` | Dev server on port 5173, host binding for LAN QR access. |
+| `src/main.ts` | タイマー状態、G2描画、ジェスチャー、ライフサイクル |
+| `doc/2026-09-16-design.md` | 画面・状態遷移・描画・検証の設計 |
+| `app.json` | Even Hubパッケージ設定 |
+| `index.html` | Even HubモバイルWebViewのホストページ |
 
-## Next steps
+## 実機確認
 
-- Add containers, input handling, lifecycle events — see the `everything-evenhub` skill suite.
-- Pick another template if you need microphone/STT (`asr`), image display (`image`), or long-form reading (`text-heavy`).
+シミュレーターと実機では、フォント、16階調表示、画像転送速度、ジェスチャーの判定が異なる場合があります。リリース前にG2実機で、ジョッキの視認性、アニメーションのちらつき、シングル／ダブルタップ、上下スワイプ、終了確認を確認してください。
