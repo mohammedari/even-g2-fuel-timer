@@ -13,6 +13,7 @@ Even mobile app; the glasses act as the display and input device.
   handling, persistence, and application lifecycle.
 - `doc/2026-09-16-design.md`: product behavior, screen layout, state machine,
   rendering pipeline, and verification plan.
+- `CHANGELOG.md`: released versions and user-visible changes.
 - `app.json`: Even Hub package metadata, permissions, and minimum versions.
 - `index.html`: mobile WebView host page.
 - `vite.config.ts`: local development server configuration.
