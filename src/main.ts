@@ -16,8 +16,12 @@ const MAX_MINUTES = 60
 const MAIN_VISIBLE_MS = 5_000
 const ANIMATION_FRAME_MS = 500
 const COMPLETION_DURATION_MS = 3_000
+const SCROLL_DEDUPLICATION_MS = 250
 const STORAGE_KEY = 'even-g2-fuel-timer.settings.v1'
 const EXIT_WITH_CONFIRMATION = 1
+// Protobuf omits an empty string, so use a visible-field/no-glyph payload to
+// ensure the device actually replaces the existing help text.
+const HIDDEN_HELP_TEXT = ' '
 
 const MAIN_VISUAL = { id: 1, name: 'main-visual', x: 8, y: 72, width: 280, height: 144 }
 const MAIN_TIMER = { id: 2, name: 'main-timer', x: 304, y: 72, width: 256, height: 144 }
@@ -64,6 +68,8 @@ let animationTimer: number | null = null
 let completionTimers: number[] = []
 let displayErrorShown = false
 let exitConfirmationPending = false
+let lastScrollAt = 0
+let lastScrollDirection: 1 | -1 | null = null
 const imageCache = new Map<string, Promise<Uint8Array>>()
 const imageRevisions = new Map<number, number>()
 const mugImage = loadImage(MUG_ASSET_URL)
@@ -98,6 +104,7 @@ await renderCurrentView()
 const unsubscribe = bridge.onEvenHubEvent(event => {
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
+  const listType = eventTypeOf(event.listEvent)
 
   if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
     cleanup()
@@ -118,23 +125,30 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     return
   }
 
-  if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+  if (
+    sysType === OsEventTypeList.DOUBLE_CLICK_EVENT
+    || textType === OsEventTypeList.DOUBLE_CLICK_EVENT
+    || listType === OsEventTypeList.DOUBLE_CLICK_EVENT
+  ) {
     void requestExitConfirmation()
     return
   }
 
-  const scrollType = textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT
-    ? textType
-    : sysType === OsEventTypeList.SCROLL_TOP_EVENT || sysType === OsEventTypeList.SCROLL_BOTTOM_EVENT
-      ? sysType
-      : null
+  const scrollType = [textType, listType, sysType].find(type => (
+    type === OsEventTypeList.SCROLL_TOP_EVENT || type === OsEventTypeList.SCROLL_BOTTOM_EVENT
+  )) ?? null
 
   if (scrollType !== null) {
-    void handleScroll(scrollType === OsEventTypeList.SCROLL_TOP_EVENT ? 1 : -1)
+    const direction = scrollType === OsEventTypeList.SCROLL_TOP_EVENT ? 1 : -1
+    if (!isDuplicateScroll(direction)) void handleScroll(direction)
     return
   }
 
-  if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+  if (
+    sysType === OsEventTypeList.CLICK_EVENT
+    || textType === OsEventTypeList.CLICK_EVENT
+    || listType === OsEventTypeList.CLICK_EVENT
+  ) {
     void handleSingleClick()
   }
 })
@@ -155,6 +169,14 @@ function imageContainer(spec: ImageSpec): ImageContainerProperty {
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
   if (!envelope) return null
   return envelope.eventType ?? OsEventTypeList.CLICK_EVENT
+}
+
+function isDuplicateScroll(direction: 1 | -1): boolean {
+  const now = performance.now()
+  const duplicate = direction === lastScrollDirection && now - lastScrollAt < SCROLL_DEDUPLICATION_MS
+  lastScrollDirection = direction
+  lastScrollAt = now
+  return duplicate
 }
 
 async function requestExitConfirmation(): Promise<void> {
@@ -190,8 +212,8 @@ async function handleSingleClick(): Promise<void> {
 
   state.mode = 'running'
   state.deadlineMs = Date.now() + state.remainingMs
-  await revealMainWhileRunning()
   scheduleCountdown()
+  await enterCompactWhileRunning()
 }
 
 async function handleScroll(direction: 1 | -1): Promise<void> {
@@ -202,7 +224,7 @@ async function handleScroll(direction: 1 | -1): Promise<void> {
     state.remainingMs = state.configuredMinutes * MINUTE_MS
     saveConfiguredMinutes(state.configuredMinutes)
     state.view = 'main'
-    await renderCurrentView()
+    renderMainTimerOnly()
     return
   }
 
@@ -210,7 +232,7 @@ async function handleScroll(direction: 1 | -1): Promise<void> {
     state.remainingMs = clamp(state.remainingMs + direction * MINUTE_MS, 0, MAX_MINUTES * MINUTE_MS)
     state.view = 'main'
     if (state.remainingMs === 0) await completeTimer()
-    else await renderCurrentView()
+    else renderMainTimerOnly()
     return
   }
 
@@ -219,9 +241,18 @@ async function handleScroll(direction: 1 | -1): Promise<void> {
 
 async function revealMainWhileRunning(): Promise<void> {
   state.view = 'main'
-  if (isForeground) startAnimation()
+  stopAnimation()
   scheduleCompactMode()
   await renderCurrentView()
+}
+
+async function enterCompactWhileRunning(): Promise<void> {
+  if (compactTimer !== null) window.clearTimeout(compactTimer)
+  compactTimer = null
+  stopAnimation()
+  state.view = 'compact'
+  await renderCurrentView()
+  if (isForeground && state.mode === 'running' && state.view === 'compact') startAnimation()
 }
 
 function scheduleCompactMode(): void {
@@ -229,8 +260,7 @@ function scheduleCompactMode(): void {
   compactTimer = window.setTimeout(() => {
     compactTimer = null
     if (disposed || !isForeground || state.mode !== 'running') return
-    state.view = 'compact'
-    void renderCurrentView()
+    void enterCompactWhileRunning()
   }, MAIN_VISIBLE_MS)
 }
 
@@ -268,11 +298,11 @@ async function reconcileAfterForeground(): Promise<void> {
       await completeTimer()
       return
     }
-    startAnimation()
     if (state.view === 'main') scheduleCompactMode()
     scheduleCountdown()
   }
   await renderCurrentView()
+  if (state.mode === 'running' && state.view === 'compact') startAnimation()
 }
 
 async function completeTimer(): Promise<void> {
@@ -287,7 +317,12 @@ async function completeTimer(): Promise<void> {
   const revision = ++renderRevision
   enqueueImage(COMPACT, blankImage(COMPACT.width, COMPACT.height), revision)
   enqueueImage(MAIN_VISUAL, completionImage(), revision)
-  enqueueImage(MAIN_TIMER, completionTextImage(), revision)
+  const completionReady = enqueueImage(MAIN_TIMER, completionTextImage(), revision)
+
+  // Start the three-second hold only after every completion image reaches the
+  // device. Otherwise a slow BLE transfer can consume the entire hold time.
+  await completionReady
+  if (disposed || state.mode !== 'completed') return
 
   completionTimers.push(window.setTimeout(() => {
     if (disposed || state.mode !== 'completed') return
@@ -304,18 +339,24 @@ async function renderCurrentView(): Promise<void> {
   const revision = ++renderRevision
 
   if (state.view === 'compact' && state.mode === 'running') {
+    await setHelpText('')
+    // Put the useful frame first. The two cheap black clears can follow while
+    // the compact timer is already visible.
+    const compactReady = enqueueImage(
+      COMPACT,
+      compactImage(displayedMinutes(remainingNow()), state.animationFrame),
+      revision,
+    )
     enqueueImage(MAIN_VISUAL, blankImage(MAIN_VISUAL.width, MAIN_VISUAL.height), revision)
     enqueueImage(MAIN_TIMER, blankImage(MAIN_TIMER.width, MAIN_TIMER.height), revision)
-    enqueueImage(COMPACT, compactImage(displayedMinutes(remainingNow()), state.animationFrame), revision)
-    await setHelpText('')
+    await compactReady
     return
   }
 
-  const frame = state.mode === 'idle' ? 0 : state.animationFrame
-  enqueueImage(MAIN_VISUAL, mainVisualImage(frame), revision)
+  enqueueImage(MAIN_VISUAL, mainVisualImage(), revision)
   enqueueImage(MAIN_TIMER, timerImage(`${displayedMinutes(currentRemaining())} min`), revision)
   enqueueImage(COMPACT, blankImage(COMPACT.width, COMPACT.height), revision)
-  await setHelpText('・ start / pause   ・・ exit   swipe change timer length')
+  await setHelpText('・start/pause; ・・exit; swipe to change timer length')
 }
 
 async function renderTimeOnly(): Promise<void> {
@@ -327,18 +368,25 @@ async function renderTimeOnly(): Promise<void> {
   else enqueueImage(MAIN_TIMER, timerImage(`${displayedMinutes(remainingNow())} min`), revision)
 }
 
+function renderMainTimerOnly(): void {
+  if (disposed) return
+  const revision = ++renderRevision
+  enqueueImage(
+    MAIN_TIMER,
+    timerImage(`${displayedMinutes(currentRemaining())} min`),
+    revision,
+  )
+}
+
 function startAnimation(): void {
   stopAnimation()
   if (disposed || state.mode !== 'running') return
   animationTimer = window.setInterval(() => {
     if (disposed || !isForeground || state.mode !== 'running') return
-    state.animationFrame = (state.animationFrame + 1) % 4
+    state.animationFrame = (state.animationFrame + 1) % 2
+    if (state.view !== 'compact') return
     const revision = ++renderRevision
-    if (state.view === 'main') {
-      enqueueImage(MAIN_VISUAL, mainVisualImage(state.animationFrame), revision)
-    } else {
-      enqueueImage(COMPACT, compactImage(displayedMinutes(remainingNow()), state.animationFrame), revision)
-    }
+    enqueueImage(COMPACT, compactImage(displayedMinutes(remainingNow()), state.animationFrame), revision)
   }, ANIMATION_FRAME_MS)
 }
 
@@ -379,49 +427,66 @@ function cleanup(): void {
   completionTimers = []
 }
 
-function enqueueImage(spec: ImageSpec, imagePromise: Promise<Uint8Array>, revision: number): void {
+function enqueueImage(spec: ImageSpec, imagePromise: Promise<Uint8Array>, revision: number): Promise<void> {
   imageRevisions.set(spec.id, revision)
   imageQueue = imageQueue
     .then(async () => {
       const imageData = await imagePromise
       if (disposed || imageRevisions.get(spec.id) !== revision) return
-      const result = await bridge.updateImageRawData(
-        new ImageRawDataUpdate({ containerID: spec.id, containerName: spec.name, imageData }),
-      )
+      const update = new ImageRawDataUpdate({
+        containerID: spec.id,
+        containerName: spec.name,
+        imageData,
+      })
+      let result = await bridge.updateImageRawData(update)
+      if (result === ImageRawDataUpdateResult.sendFailed) {
+        await delay(200)
+        if (disposed || imageRevisions.get(spec.id) !== revision) return
+        result = await bridge.updateImageRawData(update)
+      }
       if (result !== ImageRawDataUpdateResult.success) {
         throw new Error(`Image update failed for ${spec.name}: ${result}`)
       }
     })
     .catch(reportDisplayError)
+  return imageQueue
 }
 
 function reportDisplayError(error: unknown): void {
   console.error('Fuel Timer display error:', error)
   if (displayErrorShown || disposed) return
   displayErrorShown = true
-  void setHelpText('Display error - double tap to exit', true)
+  const detail = error instanceof Error ? error.message.split(':').at(-1)?.trim() : 'unknown'
+  void setHelpText(`Display error: ${detail}\nDouble tap to exit`, true)
 }
 
 async function setHelpText(content: string, force = false): Promise<void> {
   if (disposed || (displayErrorShown && !force)) return
   try {
-    await bridge.textContainerUpgrade(
-      new TextContainerUpgrade({ containerID: HELP.id, containerName: HELP.name, content }),
+    const wireContent = content.length === 0 ? HIDDEN_HELP_TEXT : content
+    const updated = await bridge.textContainerUpgrade(
+      new TextContainerUpgrade({
+        containerID: HELP.id,
+        containerName: HELP.name,
+        contentOffset: 0,
+        contentLength: wireContent.length,
+        content: wireContent,
+      }),
     )
+    if (!updated) console.error('Fuel Timer text update was rejected by the device')
   } catch (error) {
     console.error('Fuel Timer text update error:', error)
   }
 }
 
-function mainVisualImage(frame: number): Promise<Uint8Array> {
+function mainVisualImage(): Promise<Uint8Array> {
   return cachedMugAndLogoImage(
-    `main-${frame}`,
+    'main-static',
     MAIN_VISUAL.width,
     MAIN_VISUAL.height,
     (context, mug, logo) => {
       paintBackground(context, MAIN_VISUAL.width, MAIN_VISUAL.height)
-      const levels = [0.9, 0.64, 0.38, 0.12]
-      drawRealisticMug(context, mug, 0, 0, 120, 144, levels[frame] ?? levels[0], 0)
+      drawRealisticMug(context, mug, 0, 0, 120, 144, 0.9, 0)
       drawImageAsset(context, logo, 138, 2, 140, 140)
     },
   )
@@ -461,8 +526,8 @@ function timerImage(label: string): Promise<Uint8Array> {
 function compactImage(minutes: number, frame: number): Promise<Uint8Array> {
   return cachedMugImage(`compact-${minutes}-${frame}`, COMPACT.width, COMPACT.height, (context, mug) => {
     paintBackground(context, COMPACT.width, COMPACT.height)
-    const levels = [0.9, 0.64, 0.38, 0.12]
-    drawRealisticMug(context, mug, 0, 0, 53, 64, levels[frame] ?? levels[0], 0)
+    const levels = [0.9, 0.12]
+    drawRealisticMug(context, mug, 5, 6, 42, 51, levels[frame % 2] ?? levels[0], 0)
     context.fillStyle = '#ffffff'
     context.font = '900 24px "Arial Black", sans-serif'
     context.textAlign = 'center'
@@ -554,6 +619,7 @@ function canvasPng(
   if (!context) return Promise.reject(new Error('Canvas 2D is unavailable'))
   context.imageSmoothingEnabled = false
   painter(context)
+  quantizeCanvasToGray4(context, width, height)
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(blob => {
@@ -564,6 +630,31 @@ function canvasPng(
       blob.arrayBuffer().then(buffer => resolve(new Uint8Array(buffer)), reject)
     }, 'image/png')
   })
+}
+
+function quantizeCanvasToGray4(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+): void {
+  const image = context.getImageData(0, 0, width, height)
+  for (let index = 0; index < image.data.length; index += 4) {
+    const luminance = (
+      image.data[index] * 0.2126
+      + image.data[index + 1] * 0.7152
+      + image.data[index + 2] * 0.0722
+    )
+    const gray4 = Math.round(luminance / 17) * 17
+    image.data[index] = gray4
+    image.data[index + 1] = gray4
+    image.data[index + 2] = gray4
+    image.data[index + 3] = 255
+  }
+  context.putImageData(image, 0, 0)
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
 
 function paintBackground(context: CanvasRenderingContext2D, width: number, height: number): void {

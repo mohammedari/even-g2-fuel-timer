@@ -63,8 +63,10 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
 - Display remaining time as whole minutes rounded up. Use an absolute deadline
   for completion so backgrounding and delayed callbacks do not introduce
   countdown drift.
-- Show the animated main view for five seconds after starting, resuming, or a
-  running interaction, then continue the fill animation in the compact view.
+- Starting or resuming must immediately clear the help text and enter compact
+  mode. A running scroll may reveal the main view for five seconds.
+- Keep the main mug static and full. Animate only the compact mug, alternating
+  between two fill levels every 500 ms.
 - Persist only the idle configured duration under the versioned localStorage
   key `even-g2-fuel-timer.settings.v1`. Invalid data falls back to 30 minutes.
 - Completion shows a static empty mug and `Fuel up!` for approximately three
@@ -79,8 +81,11 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
   the whole page, because rebuilding can visibly flicker.
 - Call `createStartUpPageContainer` only once for the initial page.
 - Keep all image transfers on one promise queue. Never call
-  `updateImageRawData` concurrently. The requested compact animation runs at
+  `updateImageRawData` concurrently. The two-state compact animation runs at
   two frames per second; verify that cadence and transfer load on hardware.
+- Quantize composed Canvas frames to 16 grayscale levels before PNG encoding.
+  Retry `sendFailed` once, but surface persistent SDK image result codes on the
+  glasses instead of hiding them behind a generic error.
 - Exactly one container on an interactive page must capture events with
   `isEventCapture: 1`.
 - A single click has enum value `0`. Protobuf can omit this zero-valued
@@ -90,6 +95,10 @@ Do not commit generated `node_modules/`, `dist/`, or `*.ehpk` files.
   missing event type as a single click.
 - System gestures normally arrive through `sysEvent`; scrolling normally
   arrives through `textEvent`. Do not flatten unrelated envelopes into clicks.
+- Deduplicate identical scroll directions received within 250 ms because real
+  hardware can report one physical swipe through multiple event envelopes.
+- When an idle or paused scroll changes only the displayed minutes, update the
+  timer image alone; do not retransmit the mug, compact image, or help text.
 - Keep double-click as the reliable exit path and preserve its use of
   `shutDownPageContainer(1)`.
 - Unsubscribe listeners when the app receives a normal or abnormal exit event.
