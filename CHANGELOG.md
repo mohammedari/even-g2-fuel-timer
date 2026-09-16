@@ -2,6 +2,14 @@
 
 このプロジェクトの主な変更を記録します。バージョン番号はSemantic Versioningに従います。
 
+## [Unreleased]
+
+### Changed
+
+- Even Hub SDKを0.0.14へ更新し、LZ4画像転送と100ms画像経路ペーシングを利用。
+- Even Hub CLIを0.1.14、シミュレーターを0.9.3へ更新。
+- 必要バージョンをEven App 2.2.9、Even Hub SDK 0.0.14へ更新。
+
 ## [1.1.1] - 2026-09-17
 
 ### Fixed
