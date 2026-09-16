@@ -2,7 +2,7 @@
 
 このプロジェクトの主な変更を記録します。バージョン番号はSemantic Versioningに従います。
 
-## [Unreleased]
+## [1.2.0] - 2026-09-17
 
 ### Changed
 
