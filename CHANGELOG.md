@@ -2,6 +2,12 @@
 
 このプロジェクトの主な変更を記録します。バージョン番号はSemantic Versioningに従います。
 
+## [1.2.1] - 2026-09-17
+
+### Changed
+
+- [upstream issue #18](https://github.com/even-realities/everything-evenhub/issues/18) で報告されている、組み込みの終了確認後に画像更新が `sendFailed` になる問題を回避するため、ヘルプ領域で二段階の終了確認を行う方式へ変更。
+
 ## [1.2.0] - 2026-09-17
 
 ### Changed

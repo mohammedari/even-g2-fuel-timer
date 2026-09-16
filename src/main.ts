@@ -18,7 +18,9 @@ const ANIMATION_FRAME_MS = 500
 const COMPLETION_DURATION_MS = 3_000
 const SCROLL_DEDUPLICATION_MS = 250
 const STORAGE_KEY = 'even-g2-fuel-timer.settings.v1'
-const EXIT_WITH_CONFIRMATION = 1
+const EXIT_IMMEDIATELY = 0
+const MAIN_HELP_TEXT = '・start/pause; ・・exit; swipe to change timer length'
+const EXIT_CONFIRMATION_TEXT = 'Exit Fuel Timer?\n・・confirm; ・cancel'
 // Protobuf omits an empty string, so use a visible-field/no-glyph payload to
 // ensure the device actually replaces the existing help text.
 const HIDDEN_HELP_TEXT = ' '
@@ -67,7 +69,8 @@ let compactTimer: number | null = null
 let animationTimer: number | null = null
 let completionTimers: number[] = []
 let displayErrorShown = false
-let exitConfirmationPending = false
+let exitConfirmationArmed = false
+let exitRequestPending = false
 let lastScrollAt = 0
 let lastScrollDirection: 1 | -1 | null = null
 const imageCache = new Map<string, Promise<Uint8Array>>()
@@ -130,7 +133,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     || textType === OsEventTypeList.DOUBLE_CLICK_EVENT
     || listType === OsEventTypeList.DOUBLE_CLICK_EVENT
   ) {
-    void requestExitConfirmation()
+    void handleDoubleClick()
     return
   }
 
@@ -179,22 +182,41 @@ function isDuplicateScroll(direction: 1 | -1): boolean {
   return duplicate
 }
 
-async function requestExitConfirmation(): Promise<void> {
-  if (disposed || exitConfirmationPending) return
-  exitConfirmationPending = true
+async function handleDoubleClick(): Promise<void> {
+  if (disposed || exitRequestPending) return
+
+  if (!exitConfirmationArmed) {
+    exitConfirmationArmed = true
+    await setHelpText(EXIT_CONFIRMATION_TEXT, true)
+    return
+  }
+
+  exitRequestPending = true
   try {
-    const opened = await bridge.shutDownPageContainer(EXIT_WITH_CONFIRMATION)
-    if (!opened) await setHelpText('Could not open exit confirmation', true)
+    const exited = await bridge.shutDownPageContainer(EXIT_IMMEDIATELY)
+    if (!exited) {
+      exitConfirmationArmed = false
+      await setHelpText('Could not exit\nDouble tap to try again', true)
+    }
   } catch (error) {
-    console.error('Could not open the Even Hub exit confirmation:', error)
-    await setHelpText('Could not open exit confirmation', true)
+    console.error('Could not exit the Even Hub application:', error)
+    exitConfirmationArmed = false
+    await setHelpText('Could not exit\nDouble tap to try again', true)
   } finally {
-    exitConfirmationPending = false
+    exitRequestPending = false
   }
 }
 
 async function handleSingleClick(): Promise<void> {
-  if (disposed || state.mode === 'completed') return
+  if (disposed) return
+
+  if (exitConfirmationArmed) {
+    exitConfirmationArmed = false
+    await restoreHelpText()
+    return
+  }
+
+  if (state.mode === 'completed') return
 
   if (state.mode === 'running') {
     state.remainingMs = remainingNow()
@@ -217,7 +239,7 @@ async function handleSingleClick(): Promise<void> {
 }
 
 async function handleScroll(direction: 1 | -1): Promise<void> {
-  if (disposed || state.mode === 'completed') return
+  if (disposed || exitConfirmationArmed || state.mode === 'completed') return
 
   if (state.mode === 'idle') {
     state.configuredMinutes = clamp(state.configuredMinutes + direction, MIN_MINUTES, MAX_MINUTES)
@@ -356,7 +378,12 @@ async function renderCurrentView(): Promise<void> {
   enqueueImage(MAIN_VISUAL, mainVisualImage(), revision)
   enqueueImage(MAIN_TIMER, timerImage(`${displayedMinutes(currentRemaining())} min`), revision)
   enqueueImage(COMPACT, blankImage(COMPACT.width, COMPACT.height), revision)
-  await setHelpText('・start/pause; ・・exit; swipe to change timer length')
+  await setHelpText(MAIN_HELP_TEXT)
+}
+
+async function restoreHelpText(): Promise<void> {
+  const content = state.view === 'compact' || state.mode === 'completed' ? '' : MAIN_HELP_TEXT
+  await setHelpText(content, true)
 }
 
 async function renderTimeOnly(): Promise<void> {
@@ -421,6 +448,8 @@ function clearRunTimers(): void {
 
 function cleanup(): void {
   disposed = true
+  exitConfirmationArmed = false
+  exitRequestPending = false
   renderRevision += 1
   clearRunTimers()
   completionTimers.forEach(timer => window.clearTimeout(timer))
@@ -461,7 +490,7 @@ function reportDisplayError(error: unknown): void {
 }
 
 async function setHelpText(content: string, force = false): Promise<void> {
-  if (disposed || (displayErrorShown && !force)) return
+  if (disposed || (exitConfirmationArmed && !force) || (displayErrorShown && !force)) return
   try {
     const wireContent = content.length === 0 ? HIDDEN_HELP_TEXT : content
     const updated = await bridge.textContainerUpgrade(
